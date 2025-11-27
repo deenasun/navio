@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from typing import Optional, List
 from pydantic import BaseModel
+from webscraper import WebScraper, Summary
 
 
 class Match(BaseModel):
@@ -22,7 +23,7 @@ class Match(BaseModel):
 class SupabaseResponse(BaseModel):
     success: bool
     message: str
-    matches: Optional[List[Match]] = None
+    results: Optional[List[Match] | str] = None
     error: Optional[str] = None
     inserted_id: Optional[int] = None
 
@@ -112,49 +113,7 @@ class SupabaseClient:
         client = await acreate_client(url, key)
         return cls(client)
 
-    async def query(self, query: str) -> SupabaseResponse:
-        """
-        Queries the vector database for the most similar vectors to the query.
-        """
-        try:
-            embedding = self.embedder.embed_text(query)
-            embedding = embedding.tolist()
-
-            result = await self.client.rpc(
-                "match_vectors",
-                {
-                    "query_embedding": embedding,
-                    "match_threshold": 0.5,
-                    "match_count": 10,
-                },
-            ).execute()
-
-            if result.data:
-                matches = []
-                for match in result.data:
-                    matches.append(
-                        Match(
-                            id=match["id"],
-                            description=match["description"],
-                            workflow=json.loads(match["workflow"]),
-                            similarity=match["similarity"],
-                        )
-                    )
-
-                return SupabaseResponse(
-                    success=True,
-                    message=f"Found {result.count} matches for query {query}",
-                    matches=matches,
-                )
-
-        except Exception as e:
-            return SupabaseResponse(
-                success=False,
-                message="Failed to query data from Supabase",
-                error=str(e),
-            )
-
-    async def insert(self, document: SupabaseInsert) -> SupabaseResponse:
+    async def insert_vector(self, document: SupabaseInsert) -> SupabaseResponse:
         """
         Inserts a new document into the vector database.
         The new document should have the following fields:
@@ -187,17 +146,138 @@ class SupabaseClient:
                 error=str(e),
             )
 
+    async def query_vector(self, query: str) -> SupabaseResponse:
+        """
+        Queries the vector database for the most similar vectors to the query.
+        """
+        try:
+            embedding = self.embedder.embed_text(query)
+            embedding = embedding.tolist()
+
+            result = await self.client.rpc(
+                "match_vectors",
+                {
+                    "query_embedding": embedding,
+                    "match_threshold": 0.5,
+                    "match_count": 10,
+                },
+            ).execute()
+
+            if result.data:
+                matches = []
+                for match in result.data:
+                    matches.append(
+                        Match(
+                            id=match["id"],
+                            description=match["description"],
+                            workflow=json.loads(match["workflow"]),
+                            similarity=match["similarity"],
+                        )
+                    )
+
+                return SupabaseResponse(
+                    success=True,
+                    message=f"Found {result.count} matches for query {query}",
+                    results=matches,
+                )
+
+        except Exception as e:
+            return SupabaseResponse(
+                success=False,
+                message="Failed to query data from Supabase",
+                error=str(e),
+            )
+
+    async def insert_agent_txt(self, website_url: str, agent_txt: Summary) -> SupabaseResponse:
+        """
+        Inserts an agent.txt into the agent_txt table.
+        The agent.txt should have the following fields:
+        - file_diagram: str
+        - content_summary: str
+        - workflows: list[str]
+
+        Args:
+            website_url: The URL of the website to insert.
+            agent_txt: The Summary object to insert.
+        Returns:
+            A SupabaseResponse object.
+        """
+        try:
+            agent_txt_dict = agent_txt.model_dump()
+            agent_txt_str = f"""
+FILE DIAGRAM: {agent_txt_dict["file_diagram"]}\n\n
+CONTENT SUMMARY: {agent_txt_dict["content_summary"]}\n\n
+WORKFLOWS: {"\n".join([f"{i + 1}. {workflow}" for i, workflow in enumerate(agent_txt_dict["workflows"])])}
+"""
+            document = {
+                "website": website_url,
+                "agent_txt": agent_txt_str,
+            }
+
+            result = await self.client.table("agents_txt").insert(document).execute()
+            if result:
+                return SupabaseResponse(
+                    success=True,
+                    message="Data inserted into agents_txt table successfully",
+                    inserted_id=result.data[0]["id"],
+                )
+            else:
+                return SupabaseResponse(
+                    success=False,
+                    message="Failed to insert data into agents_txt Supabasetable",
+                )
+        except Exception as e:
+            return SupabaseResponse(
+                success=False,
+                message="Error inserting data into agents_txt Supabase table",
+                error=str(e),
+            )
+    async def query_agent_txt(self, website_url: str) -> SupabaseResponse:
+        """
+        Queries the agents_txt table for the agent.txt for the given website URL.
+        """
+        try:
+            result = await self.client.table("agents_txt").select("*").eq("website", website_url).limit(1).single().execute()
+            if result.data:
+                return SupabaseResponse(
+                    success=True,
+                    message=f"Found agent.txt for website {website_url}",
+                    results=result.data["agent_txt"],
+                )
+            else:
+                return SupabaseResponse(
+                    success=False,
+                    message=f"No agent.txt found for website {website_url}",
+                )
+        except Exception as e:
+            return SupabaseResponse(
+                success=False,
+                message="Error querying data from agents_txt Supabase table",
+                error=str(e),
+            )
 
 async def main():
+    # Query for workflows from the vector database
     supabase = await SupabaseClient.create()
-
-    supabase_data = await supabase.query("What is the weather in Japan?")
+    supabase_data = await supabase.query_vector("What is the weather in Japan?")
 
     for match in supabase_data.matches:
         print("match id", match.id)
         print("match description", match.description)
         print("match workflow", match.workflow)
         print("match similarity", match.similarity)
+
+    # Insert an agents.txt for a website into the agents_txt table
+    scraper = WebScraper(max_depth=1)
+    website_url = "https://apollobagels.com/"
+    scraper.scrape_website(website_url)
+    summary = scraper.summarize_content()
+    response = await supabase.insert_agent_txt(website_url, summary)
+    print(response.model_dump_json(indent=2))
+
+    # Query for the agents.txt for a website from the agents_txt table
+    agent_txt_response = await supabase.query_agent_txt(website_url)
+    print(agent_txt_response.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ Create a new virtual environment
    - Windows (PowerShell): `.venv\Scripts\Activate.ps1`
 4. Install project dependencies: `pip install -r requirements.txt`
 5. Add `SUPABASE_URL` and `SUPABASE_KEY` for the Navio Supabase project in `.env`
+6. Add an API key to access Google AI Studio in `.env`
 
 ## MCP Server
 

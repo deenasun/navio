@@ -3,6 +3,7 @@ import json
 import httpx
 from mcp.server.fastmcp import FastMCP
 from backend import SupabaseClient, SupabaseInsert
+from webscraper import WebScraper
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -58,7 +59,7 @@ async def navio_search(query: str) -> str:
     """
     logger.info(f"Starting navio_search with query: {query}")
     supabase = await SupabaseClient.create()
-    response = await supabase.query(query)
+    response = await supabase.query_vector(query)
     logger.info(f"navio_search response: {response}")
     if response.success:
         if not response.matches:
@@ -113,13 +114,49 @@ async def navio_insert(description: str, workflow: dict) -> str:
     supabase = await SupabaseClient.create()
     embedding = supabase.embedder.embed_text(description, return_numpy=True).tolist()
     document = SupabaseInsert(embedding=embedding, description=description, workflow=workflow)
-    response = await supabase.insert(document)
+    response = await supabase.insert_vector(document)
     logger.info(f"navio_insert response: {response}")
     if response.success:
         return f"Document inserted successfully with ID: {response.inserted_id}"
     else:
         return f"Failed to insert the document into the Navio database: {response.error}"
 
+
+@mcp.tool()
+async def navio_scrape(url: str) -> str:
+    """Scrape a website and return a summary of the content.
+    The summary will include the following:
+        - a high-level overview of the website's structure and key subpages in a file diagram format
+        - a detailed summary of the website's content
+        - brief descriptions about the types of actions and workflows that can be performed on the website
+
+    Args:
+        url: The URL of the website to scrape.
+    """
+    scraper = WebScraper()
+    scraper.scrape_website(url)
+    summary = scraper.summarize_content()
+    return summary.model_dump_json(indent=2)
+
+@mcp.tool()
+async def navio_query_agent_txt(url: str) -> str:
+    """Query the agents_txt table for the agent.txt for the given website URL.
+    The agent.txt is a detailed summary of a website containing the following:
+    - a high-level overview of the website's structure and key subpages in a file diagram format
+    - a detailed summary of the website's content
+    - brief descriptions about the types of actions and workflows that can be performed on the website
+    
+    The agent.txt can be used to guide another agent to efficiently navigate the website and perform actions.
+
+    Args:
+        url: The URL of the website to query the agent.txt for.
+    Returns:
+        The agent.txt for the given website URL.
+    """
+    supabase = await SupabaseClient.create()
+    response = await supabase.query_agent_txt(url)
+    logger.info(f"navio_query_agent_txt response: {response}")
+    return response.results
 
 def main():
     # Initialize and run the server
