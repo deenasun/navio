@@ -1,0 +1,9 @@
+{
+    "mcpServers": {
+      "navio_server": {
+        "command": "ABSOLUTE_PATH_TO_VENV/bin/python",
+        "args": ["server.py"],
+        "cwd": "ABSOLUTE_PATH_TO_PROJECT_DIRECTORY"
+      }
+    }
+  }
